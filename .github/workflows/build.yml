@@ -38,22 +38,13 @@ jobs:
       with:
         msbuild-architecture: x64
     
-    - name: Install Windows SDK and C++ Build Tools
+    - name: Install Build Tools
       run: |
-        Write-Host "Installing Windows SDK and C++ Build Tools via Chocolatey..."
-        
-        # Install Chocolatey if not present
-        if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-          Write-Host "Installing Chocolatey..."
-          Set-ExecutionPolicy Bypass -Scope Process -Force
-          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-          refreshenv
-        }
-        
-        # Install required components
         Write-Host "Installing Visual Studio Build Tools..."
-        choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.Windows11SDK.22621" --yes --no-progress    - name: Setup NuGet
+        choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools" --yes --no-progress
+      shell: powershell
+    
+    - name: Setup NuGet
       uses: nuget/setup-nuget@v2
       with:
         nuget-version: 'latest'
@@ -61,70 +52,29 @@ jobs:
     - name: Cache NuGet packages
       uses: actions/cache@v4
       with:
-        path: |
-          ~/.nuget/packages
-          ${{ github.workspace }}/packages
+        path: ~/.nuget/packages
         key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.vcxproj', '**/packages.config') }}
         restore-keys: |
           ${{ runner.os }}-nuget-
     
-    - name: Try building managed components only
+    - name: Build PowerLauncher
       run: |
-        Write-Host "Building only managed PowerToys components to test dynamic updates..."
-        
-        # Try building just the PowerLauncher project first
-        Write-Host "Building PowerLauncher..."
+        Write-Host "Building PowerLauncher with dynamic updates..."
         dotnet build src/modules/launcher/PowerLauncher/PowerLauncher.csproj -c Release --verbosity normal
         
         if ($LASTEXITCODE -eq 0) {
           Write-Host "PowerLauncher built successfully!"
-          
-          # Try building settings UI
-          Write-Host "Building Settings UI..."
-          dotnet build src/settings-ui/Settings.UI/Settings.UI.csproj -c Release --verbosity normal
-          
-          Write-Host "Managed components built successfully!"
         } else {
-          Write-Host "PowerLauncher build failed, trying full solution build..."
-          
-          # Fallback to full solution build
-          Write-Host "Restoring NuGet packages..."
-          nuget restore PowerToys.sln -Verbosity detailed
-          
-          Write-Host "Building full solution..."
-          msbuild PowerToys.sln `
-            /p:Configuration=${{ matrix.configuration }} `
-            /p:Platform=${{ matrix.platform }} `
-            /p:AppxBundle=Never `
-            /maxcpucount:1 `
-            /verbosity:minimal `
-            /flp:logfile=build.log`;verbosity=diagnostic
-          
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Full build failed with exit code $LASTEXITCODE"
-            if (Test-Path "build.log") {
-              Write-Host "Last 50 lines of build log:"
-              Get-Content "build.log" | Select-Object -Last 50
-            }
-            exit $LASTEXITCODE
-          }
+          Write-Error "PowerLauncher build failed with exit code $LASTEXITCODE"
+          exit $LASTEXITCODE
         }
       shell: powershell
     
-    - name: Upload build log on failure
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-log-${{ matrix.platform }}-${{ matrix.configuration }}
-        path: build.log
-        retention-days: 7
-    
-    - name: Upload managed components
+    - name: Upload PowerLauncher artifacts
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: powertoys-managed-${{ matrix.platform }}-${{ matrix.configuration }}
+        name: powertoys-launcher-${{ matrix.platform }}-${{ matrix.configuration }}
         path: |
           src/modules/launcher/PowerLauncher/bin/Release/
-          src/settings-ui/Settings.UI/bin/Release/
         retention-days: 7
