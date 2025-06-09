@@ -1,0 +1,17 @@
+{
+  "name": "PowerToys Development",
+  "image": "mcr.microsoft.com/dotnet/framework/sdk:4.8-windowsservercore-ltsc2022",
+  "features": {
+    "ghcr.io/devcontainers/features/powershell:1": {},
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-dotnettools.csharp",
+        "ms-vscode.powershell"
+      ]
+    }
+  },
+  "postCreateCommand": "choco install visualstudio2022buildtools --package-parameters '--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.Windows10SDK'"
+}

@@ -1,0 +1,100 @@
+name: Build PowerToys with Dynamic Updates
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  POWERTOYS_VERSION: "0.84.1"
+  
+jobs:
+  build:
+    runs-on: windows-2022
+    strategy:
+      matrix:
+        platform: [x64]  # Start with x64 only to save build time
+        configuration: [Release]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+      with:
+        vs-version: '[17.8,)'
+    
+    - name: Setup Windows SDK
+      uses: GuillaumeFalourd/setup-windows10-sdk-action@v2
+      with:
+        sdk-version: 22621
+    
+    - name: Setup NuGet
+      uses: nuget/setup-nuget@v2
+      with:
+        nuget-version: 'latest'
+    
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.vcxproj', '**/packages.config') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+    
+    - name: Restore NuGet packages
+      run: nuget restore PowerToys.sln
+    
+    - name: Build PowerToys Solution
+      run: |
+        msbuild PowerToys.sln `
+          /p:Configuration=${{ matrix.configuration }} `
+          /p:Platform=${{ matrix.platform }} `
+          /p:AppxBundle=Never `
+          /p:VCToolsVersion=14.38 `
+          /p:PlatformToolset=v143 `
+          /maxcpucount `
+          /verbosity:minimal
+    
+    - name: Build Spotify Plugin
+      run: |
+        cd "${{ github.workspace }}"
+        if (Test-Path "../PowerToys-Run-Spotify") {
+          cd "../PowerToys-Run-Spotify"
+          dotnet build -c Release
+          Write-Host "Spotify plugin built successfully!"
+        } else {
+          Write-Host "Spotify plugin not found in expected location"
+        }
+      shell: powershell
+    
+    - name: Upload PowerToys Build Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: powertoys-${{ matrix.platform }}-${{ matrix.configuration }}
+        path: |
+          ${{ matrix.platform }}/${{ matrix.configuration }}/
+          !${{ matrix.platform }}/${{ matrix.configuration }}/**/*.pdb
+          !${{ matrix.platform }}/${{ matrix.configuration }}/**/*.lib
+          !${{ matrix.platform }}/${{ matrix.configuration }}/**/*.exp
+        retention-days: 7
+    
+    - name: Upload Plugin Artifacts (if available)
+      uses: actions/upload-artifact@v4
+      if: hashFiles('../PowerToys-Run-Spotify/bin/Release/**/*') != ''
+      with:
+        name: spotify-plugin-${{ matrix.configuration }}
+        path: |
+          ../PowerToys-Run-Spotify/bin/Release/
+        retention-days: 7

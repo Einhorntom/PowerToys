@@ -142,9 +142,7 @@ namespace PowerLauncher.ViewModel
                 {
                     RefreshPluginsOverview();
                 }
-            };
-
-            SetHotkey(hwnd, _settings.Hotkey, OnHotkey);
+            };            SetHotkey(hwnd, _settings.Hotkey, OnHotkey);
 
             // TODO: Custom plugin hotkeys.
             // SetCustomPluginHotkey();
@@ -165,8 +163,33 @@ namespace PowerLauncher.ViewModel
                     Task.Run(
                         () =>
                         {
-                            PluginManager.UpdatePluginMetadata(e.Results, pair.Metadata, e.Query);
-                            UpdateResultView(e.Results, e.Query.RawQuery, _updateToken);
+                            // For dynamic updates, we need to replace existing results from this plugin
+                            lock (_addResultsLock)
+                            {
+                                // Using CurrentCultureIgnoreCase since this is user facing
+                                if (e.Query?.RawQuery != null && e.Query.RawQuery.Equals(_currentQuery, StringComparison.CurrentCultureIgnoreCase))
+                                {
+                                    _updateToken.ThrowIfCancellationRequested();
+
+                                    // Remove existing results from this plugin
+                                    Results.Results.RemoveAll(r => r.Result.PluginID == pair.Metadata.ID);
+                                    
+                                    // Add updated results if any
+                                    if (e.Results?.Count > 0)
+                                    {
+                                        PluginManager.UpdatePluginMetadata(e.Results, pair.Metadata, e.Query);
+                                        
+                                        foreach (var result in e.Results)
+                                        {
+                                            var selectedData = _userSelectedRecord.GetSelectedData(result);
+                                            result.SelectedCount = selectedData.SelectedCount;
+                                            result.LastSelected = selectedData.LastSelected;
+                                        }
+                                        
+                                        Results.AddResults(e.Results, _updateToken);
+                                    }
+                                }
+                            }
                         },
                         _updateToken);
                 };
