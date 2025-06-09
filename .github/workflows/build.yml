@@ -15,7 +15,7 @@ jobs:
     runs-on: windows-2022
     strategy:
       matrix:
-        platform: [x64]  # Start with x64 only to save build time
+        platform: [x64]
         configuration: [Release]
     
     steps:
@@ -28,17 +28,15 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '9.0.x'
+        dotnet-version: |
+          6.0.x
+          8.0.x
+          9.0.x
     
-    - name: Setup MSBuild
+    - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v2
       with:
-        vs-version: '[17.8,)'
-    
-    - name: Setup Windows SDK
-      uses: GuillaumeFalourd/setup-windows10-sdk-action@v2
-      with:
-        sdk-version: 22621
+        msbuild-architecture: x64
     
     - name: Setup NuGet
       uses: nuget/setup-nuget@v2
@@ -58,28 +56,11 @@ jobs:
     
     - name: Build PowerToys Solution
       run: |
-        msbuild PowerToys.sln `
-          /p:Configuration=${{ matrix.configuration }} `
-          /p:Platform=${{ matrix.platform }} `
-          /p:AppxBundle=Never `
-          /p:VCToolsVersion=14.38 `
-          /p:PlatformToolset=v143 `
-          /maxcpucount `
-          /verbosity:minimal
-    
-    - name: Build Spotify Plugin
-      run: |
-        cd "${{ github.workspace }}"
-        if (Test-Path "../PowerToys-Run-Spotify") {
-          cd "../PowerToys-Run-Spotify"
-          dotnet build -c Release
-          Write-Host "Spotify plugin built successfully!"
-        } else {
-          Write-Host "Spotify plugin not found in expected location"
-        }
-      shell: powershell
+        msbuild PowerToys.sln /p:Configuration=${{ matrix.configuration }} /p:Platform=${{ matrix.platform }} /p:AppxBundle=Never /maxcpucount /verbosity:normal
+      shell: cmd
     
     - name: Upload PowerToys Build Artifacts
+      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: powertoys-${{ matrix.platform }}-${{ matrix.configuration }}
@@ -88,13 +69,4 @@ jobs:
           !${{ matrix.platform }}/${{ matrix.configuration }}/**/*.pdb
           !${{ matrix.platform }}/${{ matrix.configuration }}/**/*.lib
           !${{ matrix.platform }}/${{ matrix.configuration }}/**/*.exp
-        retention-days: 7
-    
-    - name: Upload Plugin Artifacts (if available)
-      uses: actions/upload-artifact@v4
-      if: hashFiles('../PowerToys-Run-Spotify/bin/Release/**/*') != ''
-      with:
-        name: spotify-plugin-${{ matrix.configuration }}
-        path: |
-          ../PowerToys-Run-Spotify/bin/Release/
         retention-days: 7
