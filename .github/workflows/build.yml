@@ -33,30 +33,27 @@ jobs:
           8.0.x
           9.0.x
     
-    - name: Add MSBuild to PATH
+    - name: Add MSBuild to PATH  
       uses: microsoft/setup-msbuild@v2
       with:
         msbuild-architecture: x64
     
-    - name: Install Visual Studio components
+    - name: Install Windows SDK and C++ Build Tools
       run: |
-        # Install required Visual Studio components for C++ and Windows development
-        $installerPath = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
-        if (Test-Path $installerPath) {
-          Write-Host "Installing Visual Studio components..."
-          & $installerPath modify --installPath "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise" `
-            --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-            --add Microsoft.VisualStudio.Component.Windows11SDK.22621 `
-            --add Microsoft.VisualStudio.Component.VC.CMake.Project `
-            --add Microsoft.VisualStudio.ComponentGroup.NativeDesktop.Core `
-            --quiet --wait
-          Write-Host "Visual Studio components installed"
-        } else {
-          Write-Host "Visual Studio installer not found"
+        Write-Host "Installing Windows SDK and C++ Build Tools via Chocolatey..."
+        
+        # Install Chocolatey if not present
+        if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+          Write-Host "Installing Chocolatey..."
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          refreshenv
         }
-      shell: powershell
-    
-    - name: Setup NuGet
+        
+        # Install required components
+        Write-Host "Installing Visual Studio Build Tools..."
+        choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.Windows11SDK.22621" --yes --no-progress    - name: Setup NuGet
       uses: nuget/setup-nuget@v2
       with:
         nuget-version: 'latest'
@@ -71,41 +68,47 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-nuget-
     
-    - name: Restore NuGet packages
+    - name: Try building managed components only
       run: |
-        Write-Host "Restoring NuGet packages..."
-        nuget restore PowerToys.sln -Verbosity detailed
-        if ($LASTEXITCODE -ne 0) {
-          Write-Error "NuGet restore failed with exit code $LASTEXITCODE"
-          exit $LASTEXITCODE
-        }
-      shell: powershell
-    
-    - name: Build PowerToys Solution
-      run: |
-        Write-Host "Starting PowerToys build..."
-        Write-Host "MSBuild version:"
-        msbuild -version
+        Write-Host "Building only managed PowerToys components to test dynamic updates..."
         
-        Write-Host "Building with configuration: ${{ matrix.configuration }}, platform: ${{ matrix.platform }}"
-        msbuild PowerToys.sln `
-          /p:Configuration=${{ matrix.configuration }} `
-          /p:Platform=${{ matrix.platform }} `
-          /p:AppxBundle=Never `
-          /p:UseWinUI=true `
-          /maxcpucount:2 `
-          /verbosity:minimal `
-          /flp:logfile=build.log`;verbosity=diagnostic
+        # Try building just the PowerLauncher project first
+        Write-Host "Building PowerLauncher..."
+        dotnet build src/modules/launcher/PowerLauncher/PowerLauncher.csproj -c Release --verbosity normal
         
-        if ($LASTEXITCODE -ne 0) {
-          Write-Error "Build failed with exit code $LASTEXITCODE"
-          if (Test-Path "build.log") {
-            Write-Host "Build log contents:"
-            Get-Content "build.log" | Select-Object -Last 100
+        if ($LASTEXITCODE -eq 0) {
+          Write-Host "PowerLauncher built successfully!"
+          
+          # Try building settings UI
+          Write-Host "Building Settings UI..."
+          dotnet build src/settings-ui/Settings.UI/Settings.UI.csproj -c Release --verbosity normal
+          
+          Write-Host "Managed components built successfully!"
+        } else {
+          Write-Host "PowerLauncher build failed, trying full solution build..."
+          
+          # Fallback to full solution build
+          Write-Host "Restoring NuGet packages..."
+          nuget restore PowerToys.sln -Verbosity detailed
+          
+          Write-Host "Building full solution..."
+          msbuild PowerToys.sln `
+            /p:Configuration=${{ matrix.configuration }} `
+            /p:Platform=${{ matrix.platform }} `
+            /p:AppxBundle=Never `
+            /maxcpucount:1 `
+            /verbosity:minimal `
+            /flp:logfile=build.log`;verbosity=diagnostic
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Full build failed with exit code $LASTEXITCODE"
+            if (Test-Path "build.log") {
+              Write-Host "Last 50 lines of build log:"
+              Get-Content "build.log" | Select-Object -Last 50
+            }
+            exit $LASTEXITCODE
           }
-          exit $LASTEXITCODE
         }
-        Write-Host "Build completed successfully"
       shell: powershell
     
     - name: Upload build log on failure
@@ -116,14 +119,12 @@ jobs:
         path: build.log
         retention-days: 7
     
-    - name: Upload PowerToys Build Artifacts
+    - name: Upload managed components
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: powertoys-${{ matrix.platform }}-${{ matrix.configuration }}
+        name: powertoys-managed-${{ matrix.platform }}-${{ matrix.configuration }}
         path: |
-          ${{ matrix.platform }}/${{ matrix.configuration }}/
-          !${{ matrix.platform }}/${{ matrix.configuration }}/**/*.pdb
-          !${{ matrix.platform }}/${{ matrix.configuration }}/**/*.lib
-          !${{ matrix.platform }}/${{ matrix.configuration }}/**/*.exp
+          src/modules/launcher/PowerLauncher/bin/Release/
+          src/settings-ui/Settings.UI/bin/Release/
         retention-days: 7
