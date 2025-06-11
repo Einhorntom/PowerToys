@@ -38,11 +38,11 @@ jobs:
       with:
         msbuild-architecture: x64
     
-    - name: Install Build Tools
-      run: |
-        Write-Host "Installing Visual Studio Build Tools..."
-        choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools" --yes --no-progress
-      shell: powershell
+    - name: Setup Visual Studio components
+      uses: microsoft/setup-msbuild@v2
+      with:
+        vs-version: '[17.0,18.0)'
+        msbuild-architecture: x64
     
     - name: Setup NuGet
       uses: nuget/setup-nuget@v2
@@ -57,16 +57,54 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-nuget-
     
+    - name: Restore dependencies for PowerLauncher
+      run: |
+        Write-Host "Restoring dependencies for PowerLauncher..."
+        dotnet restore src/modules/launcher/PowerLauncher/PowerLauncher.csproj --verbosity normal
+        
+        if ($LASTEXITCODE -eq 0) {
+          Write-Host "Dependencies restored successfully!"
+        } else {
+          Write-Error "Dependency restoration failed with exit code $LASTEXITCODE"
+          exit $LASTEXITCODE
+        }
+      shell: powershell
+    
     - name: Build PowerLauncher
       run: |
         Write-Host "Building PowerLauncher with dynamic updates..."
-        dotnet build src/modules/launcher/PowerLauncher/PowerLauncher.csproj -c Release --verbosity normal
+        Write-Host "Current directory: $(Get-Location)"
+        Write-Host "Checking if project file exists..."
         
-        if ($LASTEXITCODE -eq 0) {
-          Write-Host "PowerLauncher built successfully!"
+        if (Test-Path "src/modules/launcher/PowerLauncher/PowerLauncher.csproj") {
+          Write-Host "Project file found. Building..."
+          dotnet build src/modules/launcher/PowerLauncher/PowerLauncher.csproj -c Release --no-restore --verbosity normal
+          
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "PowerLauncher built successfully!"
+            
+            # Check if output files exist
+            if (Test-Path "src/modules/launcher/PowerLauncher/bin/Release") {
+              Write-Host "Build artifacts found:"
+              Get-ChildItem "src/modules/launcher/PowerLauncher/bin/Release" -Recurse | Select-Object Name, Length
+            } else {
+              Write-Warning "Build artifacts directory not found"
+            }
+          } else {
+            Write-Error "PowerLauncher build failed with exit code $LASTEXITCODE"
+            
+            # Show more detailed error information
+            Write-Host "Trying to get more build information..."
+            dotnet build src/modules/launcher/PowerLauncher/PowerLauncher.csproj -c Release --no-restore --verbosity diagnostic | Select-Object -Last 50
+            exit $LASTEXITCODE
+          }
         } else {
-          Write-Error "PowerLauncher build failed with exit code $LASTEXITCODE"
-          exit $LASTEXITCODE
+          Write-Error "PowerLauncher project file not found!"
+          Write-Host "Available files in src/modules/launcher/:"
+          if (Test-Path "src/modules/launcher/") {
+            Get-ChildItem "src/modules/launcher/" -Recurse -Name | Select-Object -First 20
+          }
+          exit 1
         }
       shell: powershell
     
@@ -78,3 +116,14 @@ jobs:
         path: |
           src/modules/launcher/PowerLauncher/bin/Release/
         retention-days: 7
+    
+    - name: Upload logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs-${{ matrix.platform }}-${{ matrix.configuration }}
+        path: |
+          **/*.log
+          **/bin/
+          **/obj/
+        retention-days: 3

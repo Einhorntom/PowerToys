@@ -1,0 +1,80 @@
+name: Build PowerToys with Dynamic Updates
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  POWERTOYS_VERSION: "0.84.1"
+  
+jobs:
+  build:
+    runs-on: windows-2022
+    strategy:
+      matrix:
+        platform: [x64]
+        configuration: [Release]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: |
+          6.0.x
+          8.0.x
+          9.0.x
+    
+    - name: Add MSBuild to PATH  
+      uses: microsoft/setup-msbuild@v2
+      with:
+        msbuild-architecture: x64
+    
+    - name: Install Build Tools
+      run: |
+        Write-Host "Installing Visual Studio Build Tools..."
+        choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools" --yes --no-progress
+      shell: powershell
+    
+    - name: Setup NuGet
+      uses: nuget/setup-nuget@v2
+      with:
+        nuget-version: 'latest'
+    
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.vcxproj', '**/packages.config') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+    
+    - name: Build PowerLauncher
+      run: |
+        Write-Host "Building PowerLauncher with dynamic updates..."
+        dotnet build src/modules/launcher/PowerLauncher/PowerLauncher.csproj -c Release --verbosity normal
+        
+        if ($LASTEXITCODE -eq 0) {
+          Write-Host "PowerLauncher built successfully!"
+        } else {
+          Write-Error "PowerLauncher build failed with exit code $LASTEXITCODE"
+          exit $LASTEXITCODE
+        }
+      shell: powershell
+    
+    - name: Upload PowerLauncher artifacts
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: powertoys-launcher-${{ matrix.platform }}-${{ matrix.configuration }}
+        path: |
+          src/modules/launcher/PowerLauncher/bin/Release/
+        retention-days: 7
