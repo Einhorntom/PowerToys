@@ -1,0 +1,140 @@
+name: Build PowerToys with Dynamic Updates
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  POWERTOYS_VERSION: "0.84.1"
+  BUILD_ITERATION: "1"
+  
+jobs:
+  build:
+    runs-on: windows-2022
+    strategy:
+      matrix:
+        platform: [x64]
+        configuration: [Release]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: |
+          6.0.x
+          8.0.x
+          9.0.x
+    
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v2
+      with:
+        msbuild-architecture: x64
+    
+    - name: Setup NuGet
+      uses: nuget/setup-nuget@v2
+      with:
+        nuget-version: 'latest'
+    
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.vcxproj', '**/packages.config') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+    
+    - name: Restore NuGet packages
+      run: |
+        Write-Host "Restoring NuGet packages for PowerToys solution..."
+        nuget restore PowerToys.sln -Verbosity normal
+        
+        if ($LASTEXITCODE -eq 0) {
+          Write-Host "✅ NuGet packages restored successfully"
+        } else {
+          Write-Error "❌ NuGet restore failed with exit code $LASTEXITCODE"
+          exit $LASTEXITCODE
+        }
+      shell: powershell
+    
+    - name: Build PowerToys Solution
+      run: |
+        Write-Host "Building PowerToys solution with MSBuild..."
+        Write-Host "MSBuild version:"
+        msbuild -version
+        
+        # Build with conservative settings to avoid timeouts
+        msbuild PowerToys.sln `
+          /p:Configuration=${{ matrix.configuration }} `
+          /p:Platform=${{ matrix.platform }} `
+          /p:AppxBundle=Never `
+          /p:BuildProjectReferences=true `
+          /maxcpucount:1 `
+          /verbosity:minimal `
+          /nodeReuse:false `
+          /flp:logfile=build.log`;verbosity=normal
+        
+        if ($LASTEXITCODE -eq 0) {
+          Write-Host "✅ PowerToys built successfully!"
+          
+          # Check build outputs
+          Write-Host "`n=== Build Outputs ==="
+          if (Test-Path "${{ matrix.platform }}/${{ matrix.configuration }}") {
+            Write-Host "Main build output found:"
+            Get-ChildItem "${{ matrix.platform }}/${{ matrix.configuration }}" -Name | Sort-Object | Select-Object -First 20
+          }
+          
+          # Check PowerLauncher specifically
+          if (Test-Path "src/modules/launcher/PowerLauncher/bin/${{ matrix.configuration }}") {
+            Write-Host "`nPowerLauncher output found:"
+            Get-ChildItem "src/modules/launcher/PowerLauncher/bin/${{ matrix.configuration }}" -Recurse -Name | Select-Object -First 10
+          }
+        } else {
+          Write-Error "❌ PowerToys build failed with exit code $LASTEXITCODE"
+          
+          if (Test-Path "build.log") {
+            Write-Host "`n=== Last 100 lines of build log ==="
+            Get-Content "build.log" | Select-Object -Last 100
+          }
+          exit $LASTEXITCODE
+        }
+      shell: powershell
+    
+    - name: Upload build log on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log-${{ matrix.platform }}-${{ matrix.configuration }}
+        path: |
+          build.log
+          **/*.log
+        retention-days: 7
+    
+    - name: Upload PowerToys Build Artifacts
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: powertoys-${{ matrix.platform }}-${{ matrix.configuration }}
+        path: |
+          ${{ matrix.platform }}/${{ matrix.configuration }}/
+          !${{ matrix.platform }}/${{ matrix.configuration }}/**/*.pdb
+          !${{ matrix.platform }}/${{ matrix.configuration }}/**/*.lib
+          !${{ matrix.platform }}/${{ matrix.configuration }}/**/*.exp
+        retention-days: 30
+    
+    - name: Upload PowerLauncher with Dynamic Updates
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: powerlauncher-with-dynamic-updates-${{ matrix.platform }}-${{ matrix.configuration }}
+        path: |
+          src/modules/launcher/PowerLauncher/bin/${{ matrix.configuration }}/
+        retention-days: 30
