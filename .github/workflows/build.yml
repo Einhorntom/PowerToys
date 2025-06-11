@@ -11,7 +11,7 @@ env:
   POWERTOYS_VERSION: "0.84.1"
   
 jobs:
-  test-dynamic-updates:
+  build:
     runs-on: windows-2022
     strategy:
       matrix:
@@ -28,116 +28,112 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '9.0.x'
+        dotnet-version: |
+          6.0.x
+          8.0.x
+          9.0.x
     
-    - name: Test our dynamic updates code changes
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v2
+      with:
+        msbuild-architecture: x64
+    
+    - name: Setup NuGet
+      uses: nuget/setup-nuget@v2
+      with:
+        nuget-version: 'latest'
+    
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.vcxproj', '**/packages.config') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+    
+    - name: Restore NuGet packages
       run: |
-        Write-Host "=== Testing Dynamic Updates Implementation ==="
-        Write-Host "Checking our MainViewModel.cs changes..."
+        Write-Host "Restoring NuGet packages for PowerToys solution..."
+        nuget restore PowerToys.sln -Verbosity normal
         
-        $mainViewModelPath = "src/modules/launcher/PowerLauncher/ViewModel/MainViewModel.cs"
-        if (Test-Path $mainViewModelPath) {
-          Write-Host "✅ MainViewModel.cs found"
+        if ($LASTEXITCODE -eq 0) {
+          Write-Host "✅ NuGet packages restored successfully"
+        } else {
+          Write-Error "❌ NuGet restore failed with exit code $LASTEXITCODE"
+          exit $LASTEXITCODE
+        }
+      shell: powershell
+    
+    - name: Build PowerToys Solution
+      run: |
+        Write-Host "Building PowerToys solution with MSBuild..."
+        Write-Host "MSBuild version:"
+        msbuild -version
+        
+        # Build with conservative settings to avoid timeouts
+        msbuild PowerToys.sln `
+          /p:Configuration=${{ matrix.configuration }} `
+          /p:Platform=${{ matrix.platform }} `
+          /p:AppxBundle=Never `
+          /p:BuildProjectReferences=true `
+          /maxcpucount:1 `
+          /verbosity:minimal `
+          /nodeReuse:false `
+          /flp:logfile=build.log`;verbosity=normal
+        
+        if ($LASTEXITCODE -eq 0) {
+          Write-Host "✅ PowerToys built successfully!"
           
-          # Check if our dynamic update method exists
-          $content = Get-Content $mainViewModelPath -Raw
-          if ($content -match "UpdateResultRealTime|IResultUpdated") {
-            Write-Host "✅ Dynamic updates code found in MainViewModel.cs"
-          } else {
-            Write-Host "❌ Dynamic updates code not found in MainViewModel.cs"
+          # Check build outputs
+          Write-Host "`n=== Build Outputs ==="
+          if (Test-Path "${{ matrix.platform }}/${{ matrix.configuration }}") {
+            Write-Host "Main build output found:"
+            Get-ChildItem "${{ matrix.platform }}/${{ matrix.configuration }}" -Name | Sort-Object | Select-Object -First 20
           }
           
-          # Show our changes
-          Write-Host "`n=== Our Dynamic Updates Changes ==="
-          $content | Select-String -Pattern "UpdateResultRealTime|IResultUpdated" -Context 3
+          # Check PowerLauncher specifically
+          if (Test-Path "src/modules/launcher/PowerLauncher/bin/${{ matrix.configuration }}") {
+            Write-Host "`nPowerLauncher output found:"
+            Get-ChildItem "src/modules/launcher/PowerLauncher/bin/${{ matrix.configuration }}" -Recurse -Name | Select-Object -First 10
+          }
         } else {
-          Write-Error "❌ MainViewModel.cs not found at $mainViewModelPath"
+          Write-Error "❌ PowerToys build failed with exit code $LASTEXITCODE"
+          
+          if (Test-Path "build.log") {
+            Write-Host "`n=== Last 100 lines of build log ==="
+            Get-Content "build.log" | Select-Object -Last 100
+          }
+          exit $LASTEXITCODE
         }
-        
-        Write-Host "`n=== PowerToys Project Structure ==="
-        Write-Host "PowerLauncher directory contents:"
-        if (Test-Path "src/modules/launcher/PowerLauncher/") {
-          Get-ChildItem "src/modules/launcher/PowerLauncher/" -Name | Sort-Object
-        }
-        
-        Write-Host "`n=== Spotify Plugin Status ==="
-        Write-Host "Spotify plugin files:"
-        if (Test-Path "../PowerToys-Run-Spotify/") {
-          Get-ChildItem "../PowerToys-Run-Spotify/" -Name | Sort-Object
-        } else {
-          Write-Host "Spotify plugin not found in parent directory"
-        }
-        
-        Write-Host "`n=== Summary ==="
-        Write-Host "✅ PowerToys source code with dynamic updates: AVAILABLE"
-        Write-Host "✅ Spotify plugin source code: AVAILABLE"
-        Write-Host "✅ Dynamic updates implementation: VERIFIED"
-        Write-Host "`nThe dynamic updates feature is implemented and ready!"
-        Write-Host "Both PowerToys and the Spotify plugin can be built locally with Visual Studio."
       shell: powershell
     
-    - name: Create implementation summary
-      run: |
-        Write-Host "Creating implementation summary..."
-        
-        $summary = @"
-        # PowerToys Dynamic Updates Implementation Summary
-        
-        ## ✅ What's Been Implemented
-        
-        ### 1. PowerToys Core Changes
-        - **MainViewModel.cs**: Enhanced with real-time result replacement logic
-        - **IResultUpdated Interface**: Support for plugins to trigger UI updates
-        - **Dynamic result replacement**: Real-time updates without full query re-execution
-        
-        ### 2. Spotify Plugin Integration
-        - **IResultUpdated implementation**: Plugin can update results in real-time
-        - **Music control updates**: Play/pause status updates without re-querying
-        - **Performance optimization**: Reduces API calls and improves responsiveness
-        
-        ### 3. Technical Implementation
-        - **Event-driven updates**: Plugins can notify PowerLauncher of state changes
-        - **Thread-safe operations**: Proper UI thread marshaling for updates
-        - **Backward compatibility**: Existing plugins continue to work unchanged
-        
-        ## 🎯 Benefits Achieved
-        
-        1. **Real-time music controls**: Spotify controls update immediately when song changes
-        2. **Reduced API overhead**: No need to re-query Spotify API for status updates
-        3. **Better user experience**: Instantaneous feedback for music control actions
-        4. **Extensible framework**: Other plugins can implement similar real-time updates
-        
-        ## 📁 Files Modified
-        
-        - `src/modules/launcher/PowerLauncher/ViewModel/MainViewModel.cs`
-        - `../PowerToys-Run-Spotify/Main.cs` (implements IResultUpdated)
-        
-        ## 🚀 Next Steps
-        
-        To complete the implementation:
-        1. Build PowerToys with Visual Studio (requires C++ build tools)
-        2. Build the Spotify plugin with: `dotnet build -c Release`
-        3. Copy plugin to PowerToys RunPlugins directory
-        4. Test dynamic updates with music playback
-        
-        ## ✨ The Feature Works!
-        
-        The dynamic updates functionality is fully implemented and ready for testing.
-        The GitHub Actions build issues don't affect the core functionality - 
-        both projects can be built and tested locally.
-        "@
-        
-        $summary | Out-File -FilePath "IMPLEMENTATION_SUMMARY.md" -Encoding UTF8
-        Write-Host "Implementation summary created: IMPLEMENTATION_SUMMARY.md"
-        
-        Write-Host "`n$summary"
-      shell: powershell
-    
-    - name: Upload implementation summary
+    - name: Upload build log on failure
+      if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: dynamic-updates-implementation-summary
+        name: build-log-${{ matrix.platform }}-${{ matrix.configuration }}
         path: |
-          IMPLEMENTATION_SUMMARY.md
-          src/modules/launcher/PowerLauncher/ViewModel/MainViewModel.cs
+          build.log
+          **/*.log
+        retention-days: 7
+    
+    - name: Upload PowerToys Build Artifacts
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: powertoys-${{ matrix.platform }}-${{ matrix.configuration }}
+        path: |
+          ${{ matrix.platform }}/${{ matrix.configuration }}/
+          !${{ matrix.platform }}/${{ matrix.configuration }}/**/*.pdb
+          !${{ matrix.platform }}/${{ matrix.configuration }}/**/*.lib
+          !${{ matrix.platform }}/${{ matrix.configuration }}/**/*.exp
+        retention-days: 30
+    
+    - name: Upload PowerLauncher with Dynamic Updates
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: powerlauncher-with-dynamic-updates-${{ matrix.platform }}-${{ matrix.configuration }}
+        path: |
+          src/modules/launcher/PowerLauncher/bin/${{ matrix.configuration }}/
         retention-days: 30
