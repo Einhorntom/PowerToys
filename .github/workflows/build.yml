@@ -9,6 +9,8 @@ on:
 
 env:
   POWERTOYS_VERSION: "0.84.1"
+  BUILD_ITERATION: "1"
+  BUILD_ITERATION: "1"
   
 jobs:
   build:
